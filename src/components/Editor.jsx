@@ -15,18 +15,27 @@ function downloadFile(filename, content) {
 }
 
 export default function Editor() {
-  const { fileName, xmlDoc, reset, invalidCharsRemoved } = useStore.getState();
+  const fileName = useStore.use.fileName();
+  const xmlDoc = useStore.use.xmlDoc();
+  const reset = useStore.use.reset();
+  const invalidCharsRemoved = useStore.use.invalidCharsRemoved();
 
   const handleDownload = () => {
     if (!xmlDoc) return;
     try {
-      const xmlString = jsonToXml(xmlDoc.doc, xmlDoc.rootName);
+      // Pass the inner object to prevent double-wrapping the root element
+      const xmlString = jsonToXml(xmlDoc.doc[xmlDoc.rootName], xmlDoc.rootName);
       downloadFile(fileName, xmlString);
     } catch (error) {
       console.error('Failed to generate XML:', error);
       alert('Error generating XML file.');
     }
   };
+  
+  // This check adds robustness, though the parent <App> component should prevent this case.
+  if (!xmlDoc) {
+    return null;
+  }
 
   return (
     <div className="editor-layout">
