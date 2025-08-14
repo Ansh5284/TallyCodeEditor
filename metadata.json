@@ -1,0 +1,5 @@
+{
+  "name": "Tally Code Editor",
+  "description": "An application to edit Tally XML files in a user-friendly way.",
+  "requestFramePermissions": []
+}
