@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    This is a sample XML document with deeply nested table-like structures
+    to test recursive parsing and data extraction from complex hierarchies.
+-->
+<data>
+    <report title="Quarterly Sales Report">
+        <section name="Asia Pacific Sales">
+            <region name="South East Asia">
+                <country name="Singapore">
+                    <sales_data year="2023">
+                        <category name="Electronics">
+                            <product name="Smartphone">
+                                <details>
+                                    <units_sold>15000</units_sold>
+                                    <revenue_usd>12000000</revenue_usd>
+                                    <breakdown>
+                                        <channels>
+                                            <channel type="Online">
+                                                <orders_data>
+                                                    <order id="A101">
+                                                        <customer_id>CUST_001</customer_id>
+                                                        <items>
+                                                            <item sku="S001" quantity="1"/>
+                                                        </items>
+                                                    </order>
+                                                    <order id="A102">
+                                                        <customer_id>CUST_002</customer_id>
+                                                        <items>
+                                                            <item sku="S001" quantity="1"/>
+                                                            <item sku="S002" quantity="1"/>
+                                                        </items>
+                                                        <tracking_info>
+                                                            <status>Shipped</status>
+                                                            <carrier>GlobalExpress</carrier>
+                                                            <history>
+                                                                <event date="2023-01-15">Order Confirmed</event>
+                                                                <event date="2023-01-16">Packed</event>
+                                                                <event date="2023-01-17">Shipped from Warehouse</event>
+                                                                <event date="2023-01-19">In Transit</event>
+                                                                <event date="2023-01-22">Out for Delivery</event>
+                                                            </history>
+                                                        </tracking_info>
+                                                    </order>
+                                                </orders_data>
+                                            </channel>
+                                            <channel type="Retail">
+                                                <store_sales store_id="SNG_01">
+                                                    <!-- More daily summary rows added -->
+                                                    <daily_summary date="2023-01-15">
+                                                        <transaction_count>50</transaction_count>
+                                                        <total_sales>85000</total_sales>
+                                                    </daily_summary>
+                                                    <daily_summary date="2023-01-16">
+                                                        <transaction_count>55</transaction_count>
+                                                        <total_sales>92500</total_sales>
+                                                    </daily_summary>
+                                                    <daily_summary date="2023-01-17">
+                                                        <transaction_count>62</transaction_count>
+                                                        <total_sales>105000</total_sales>
+                                                    </daily_summary>
+                                                    <daily_summary date="2023-01-18">
+                                                        <transaction_count>70</transaction_count>
+                                                        <total_sales>120000</total_sales>
+                                                    </daily_summary>
+                                                </store_sales>
+                                            </channel>
+                                        </channels>
+                                    </breakdown>
+                                </details>
+                            </product>
+                            <!-- New product with multiple nested rows added -->
+                            <product name="Laptop">
+                                <details>
+                                    <units_sold>8000</units_sold>
+                                    <revenue_usd>10000000</revenue_usd>
+                                    <breakdown>
+                                        <channels>
+                                            <channel type="Online">
+                                                <orders_data>
+                                                    <order id="A103">
+                                                        <customer_id>CUST_003</customer_id>
+                                                        <items>
+                                                            <item sku="L001" quantity="1"/>
+                                                        </items>
+                                                    </order>
+                                                    <order id="A104">
+                                                        <customer_id>CUST_004</customer_id>
+                                                        <items>
+                                                            <item sku="L001" quantity="1"/>
+                                                            <item sku="M001" quantity="1"/>
+                                                        </items>
+                                                    </order>
+                                                    <order id="A105">
+                                                        <customer_id>CUST_005</customer_id>
+                                                        <items>
+                                                            <item sku="L001" quantity="1"/>
+                                                        </items>
+                                                    </order>
+                                                </orders_data>
+                                            </channel>
+                                        </channels>
+                                    </breakdown>
+                                </details>
+                            </product>
+                        </category>
+                    </sales_data>
+                </country>
+                <!-- New nested country with sales data added -->
+                <country name="Malaysia">
+                    <sales_data year="2023">
+                        <category name="Electronics">
+                            <product name="Smartphone">
+                                <details>
+                                    <units_sold>10000</units_sold>
+                                    <revenue_usd>8000000</revenue_usd>
+                                    <breakdown>
+                                        <channels>
+                                            <channel type="Online">
+                                                <orders_data>
+                                                    <order id="M101">
+                                                        <customer_id>CUST_010</customer_id>
+                                                        <items>
+                                                            <item sku="S001" quantity="1"/>
+                                                        </items>
+                                                    </order>
+                                                </orders_data>
+                                            </channel>
+                                        </channels>
+                                    </breakdown>
+                                </details>
+                            </product>
+                        </category>
+                    </sales_data>
+                </country>
+            </region>
+        </section>
+        <section name="North American Sales">
+            <region name="West Coast">
+                <country name="USA">
+                    <sales_data year="2023">
+                        <category name="Software">
+                            <product name="Cloud Storage Subscription">
+                                <details>
+                                    <units_sold>25000</units_sold>
+                                    <revenue_usd>500000</revenue_usd>
+                                    <breakdown>
+                                        <channels>
+                                            <channel type="Online">
+                                                <orders_data>
+                                                    <order id="B201">
+                                                        <customer_id>CUST_100</customer_id>
+                                                        <items>
+                                                            <item sku="SW01" quantity="1" license="monthly"/>
+                                                        </items>
+                                                    </order>
+                                                </orders_data>
+                                            </channel>
+                                        </channels>
+                                    </breakdown>
+                                </details>
+                            </product>
+                        </category>
+                    </sales_data>
+                </country>
+                <!-- New nested country with sales data added -->
+                <country name="Canada">
+                    <sales_data year="2023">
+                        <category name="Software">
+                            <product name="Video Editing Suite">
+                                <details>
+                                    <units_sold>1200</units_sold>
+                                    <revenue_usd>360000</revenue_usd>
+                                    <breakdown>
+                                        <channels>
+                                            <channel type="Online">
+                                                <orders_data>
+                                                    <order id="C301">
+                                                        <customer_id>CUST_120</customer_id>
+                                                        <items>
+                                                            <item sku="SW02" quantity="1" license="annual"/>
+                                                        </items>
+                                                    </order>
+                                                </orders_data>
+                                            </channel>
+                                        </channels>
+                                    </breakdown>
+                                </details>
+                            </product>
+                        </category>
+                    </sales_data>
+                </country>
+            </region>
+        </section>
+    </report>
+</data>

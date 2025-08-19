@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import useStore from '../lib/store';
-import { cleanXML, parseXML } from '../lib/xmlUtils';
+import { decodeXML, cleanXML, parseXML } from '../lib/xmlUtils';
 import clsx from 'clsx';
 
 export default function FileUploader() {
@@ -11,12 +11,13 @@ export default function FileUploader() {
 
   const handleFile = useCallback(
     async (file) => {
-      if (file && file.type === 'text/xml') {
+      if (file && (file.type === 'text/xml' || file.name.endsWith('.xml'))) {
         setLoading(true);
         setError('');
         try {
-          const text = await file.text();
-          const { cleaned, removedCount } = cleanXML(text);
+          const buffer = await file.arrayBuffer();
+          const decodedText = decodeXML(buffer);
+          const { cleaned, removedCount, log } = cleanXML(decodedText);
           const { doc, rootName } = parseXML(cleaned);
           
           const fileData = {
@@ -25,10 +26,10 @@ export default function FileUploader() {
             originalXml: cleaned
           };
           
-          setFile(file.name, fileData, removedCount);
+          setFile(file.name, fileData, removedCount, log);
         } catch (e) {
           console.error('File processing error:', e);
-          setError(`Failed to parse XML file. Please check the file format. Error: ${e.message}`);
+          setError(`Failed to parse XML file. Please check the file encoding and format. Error: ${e.message}`);
           setLoading(false);
         }
       } else {

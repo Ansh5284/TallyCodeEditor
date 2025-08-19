@@ -3,6 +3,8 @@ import useStore from '../lib/store';
 import { jsonToXml } from '../lib/xmlUtils';
 import TreeView from './TreeView';
 import DataTable from './DataTable';
+import ColumnSelectorModal from './ColumnSelectorModal';
+import CleaningLogNotification from './CleaningLogNotification';
 
 function downloadFile(filename, content) {
   const element = document.createElement('a');
@@ -18,13 +20,13 @@ export default function Editor() {
   const fileName = useStore.use.fileName();
   const xmlDoc = useStore.use.xmlDoc();
   const reset = useStore.use.reset();
-  const invalidCharsRemoved = useStore.use.invalidCharsRemoved();
+  const nodeForColumnSelection = useStore.use.nodeForColumnSelection();
 
   const handleDownload = () => {
     if (!xmlDoc) return;
     try {
-      // Pass the inner object to prevent double-wrapping the root element
-      const xmlString = jsonToXml(xmlDoc.doc[xmlDoc.rootName], xmlDoc.rootName);
+      // Correctly pass the entire document object to the XML generator.
+      const xmlString = jsonToXml(xmlDoc.doc, xmlDoc.rootName);
       downloadFile(fileName, xmlString);
     } catch (error) {
       console.error('Failed to generate XML:', error);
@@ -43,11 +45,6 @@ export default function Editor() {
         <div className="editor-header-title">
           <h1>Tally Code Editor</h1>
           <span className="file-info">{fileName}</span>
-          {invalidCharsRemoved > 0 && (
-            <span className="file-info" style={{color: 'var(--accent-green)'}}>
-              {invalidCharsRemoved} invalid characters removed
-            </span>
-          )}
         </div>
         <div className="header-actions">
            <button onClick={reset} className="action-button secondary">
@@ -58,6 +55,7 @@ export default function Editor() {
           </button>
         </div>
       </header>
+       <CleaningLogNotification />
       <main className="editor-main">
         <aside className="sidebar">
             <TreeView data={xmlDoc.doc} />
@@ -66,6 +64,7 @@ export default function Editor() {
           <DataTable />
         </div>
       </main>
+      {nodeForColumnSelection && <ColumnSelectorModal />}
     </div>
   );
 }
