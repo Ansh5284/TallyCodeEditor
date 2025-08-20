@@ -3,7 +3,7 @@ import useStore from '../lib/store';
 import get from 'lodash.get';
 
 // Helper to get all unique keys from an array of objects or a single object
-const getHeadersFromAllItems = (data) => {
+export const getHeadersFromAllItems = (data) => {
   const dataArray = Array.isArray(data) 
     ? data 
     : (typeof data === 'object' && data !== null ? [data] : []);

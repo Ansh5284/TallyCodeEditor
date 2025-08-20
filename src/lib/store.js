@@ -13,6 +13,7 @@ const useStoreBase = create(
     viewingHistory: [],
     nodeForColumnSelection: null, // Will be { path, parentPath }
     tableColumns: {}, // { [pathKey]: ['col1', { parent: 'nested', child: 'col2' }] }
+    tableFilters: {}, // { [pathKey]: { [headerKey]: 'filter string' } }
     invalidCharsRemoved: 0,
     cleaningLog: [],
 
@@ -26,6 +27,7 @@ const useStoreBase = create(
         state.viewingHistory = [];
         state.nodeForColumnSelection = null;
         state.tableColumns = {};
+        state.tableFilters = {};
       }),
 
     setViewingNodePath: (path) =>
@@ -64,6 +66,23 @@ const useStoreBase = create(
         state.tableColumns[pathKey] = columns;
       }),
 
+    setTableFilter: (path, headerKey, filterValue) =>
+      set((state) => {
+        const pathKey = JSON.stringify(path);
+        if (!state.tableFilters[pathKey]) {
+          state.tableFilters[pathKey] = {};
+        }
+        if (filterValue) {
+          state.tableFilters[pathKey][headerKey] = filterValue;
+        } else {
+          // Remove filter if value is empty/null
+          delete state.tableFilters[pathKey][headerKey];
+          if (Object.keys(state.tableFilters[pathKey]).length === 0) {
+            delete state.tableFilters[pathKey];
+          }
+        }
+      }),
+
     updateNodeValue: (path, newValue) =>
       set((state) => {
         if (!path || path.length === 0) return;
@@ -93,6 +112,7 @@ const useStoreBase = create(
         state.viewingHistory = [];
         state.nodeForColumnSelection = null;
         state.tableColumns = {};
+        state.tableFilters = {};
         state.invalidCharsRemoved = 0;
         state.cleaningLog = [];
       }),

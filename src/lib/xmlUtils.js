@@ -42,7 +42,30 @@ export function cleanXML(xmlString) {
     cleaned = cleaned.replace(/^[\s\uFEFF\uFFFD]+/, '');
   }
   
-  // Step 2: Final cleaning for invalid XML characters
+  // Step 2: Remove character references to invalid control characters (e.g., &#x4;, &#5;)
+  // These are not raw characters but string representations that can break parsers.
+  const invalidEntityRegex = /&#x0*([0-9a-f]{1,2});|&#0*(\d{1,2});/gi;
+  let entitiesRemovedCount = 0;
+  
+  cleaned = cleaned.replace(invalidEntityRegex, (match, hex, dec) => {
+    const code = parseInt(hex || dec, hex ? 16 : 10);
+    // XML spec allows tab (9), newline (10), and carriage return (13).
+    // All other control characters below 32 (space) are invalid.
+    if (code < 32 && ![9, 10, 13].includes(code)) {
+      entitiesRemovedCount++;
+      return ''; // Remove the invalid entity
+    }
+    return match; // Keep the valid one
+  });
+
+  if (entitiesRemovedCount > 0) {
+    log.push(`Removed ${entitiesRemovedCount} character reference(s) to invalid control characters (e.g., &#x4;).`);
+  }
+
+  // Step 3: Final cleaning for invalid raw XML characters
+  // This regex matches any character that is NOT a valid XML 1.0 character.
+  // Valid characters are #x9, #xA, #xD, and the ranges #x20-#xD7FF, #xE000-#xFFFD, #x10000-#x10FFFF.
+  // This handles any invalid characters that were not in entity form.
   // eslint-disable-next-line no-control-regex
   const invalidRawCharRegex = /[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu;
   const invalidChars = cleaned.match(invalidRawCharRegex) || [];
@@ -50,7 +73,7 @@ export function cleanXML(xmlString) {
   if (invalidChars.length > 0) {
      const uniqueInvalid = [...new Set(invalidChars)];
      const charCodes = uniqueInvalid.map(c => `U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`).join(', ');
-     log.push(`Removed ${invalidChars.length} invalid control character(s) not allowed in XML. Unique characters found: ${charCodes}.`);
+     log.push(`Removed ${invalidChars.length} invalid raw control character(s) not allowed in XML. Unique characters found: ${charCodes}.`);
      cleaned = cleaned.replace(invalidRawCharRegex, '');
   }
   

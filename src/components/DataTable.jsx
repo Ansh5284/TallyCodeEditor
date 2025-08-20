@@ -1,8 +1,11 @@
-import React from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import useStore from '../lib/store';
 import get from 'lodash.get';
 import EditableCell from './EditableCell';
 import ValueRenderer from './ValueRenderer';
+import { parseFilterQuery, testValue } from '../lib/filterParser';
+import clsx from 'clsx';
+import AdvancedFilterPopover from './AdvancedFilterPopover';
 
 function getHeaderKey(header) {
     if (typeof header === 'object' && header !== null) {
@@ -23,7 +26,7 @@ function caseInsensitiveGet(obj, pathSegments) {
     let current = obj;
     const actualPath = [];
     for (const segment of pathSegments) {
-        if (current === null || current === undefined) return { value: undefined, actualPath: null };
+        if (typeof current !== 'object' || current === null) return { value: undefined, actualPath: null };
         
         // Find the key in the current object that matches the segment case-insensitively.
         const key = Object.keys(current).find(k => k.toLowerCase() === segment.toLowerCase());
@@ -61,9 +64,37 @@ function flattenRow(row, rowIndex, headers, pathPrefix) {
 
             if (!isComplex) {
                 // SIMPLE HEADER: value is relative to the original row object.
-                const pathSegments = header.split('.');
-                const { value, actualPath } = caseInsensitiveGet(row, pathSegments);
-                const path = actualPath ? [...pathPrefix, rowIndex, ...actualPath] : undefined;
+                let value;
+                let path;
+
+                if (header === 'value') {
+                    // This handles arrays of primitives, where 'row' is the primitive itself.
+                    value = row;
+                    path = [...pathPrefix, rowIndex];
+                } else if (typeof row === 'object' && row !== null) {
+                    // Standard case: row is an object, find a property within it.
+                    let pathSegments;
+                    if (header.startsWith('@')) {
+                        // Support dot notation within attributes if ever needed, e.g., @ATTR.NESTED
+                        pathSegments = ['@attributes', ...header.substring(1).split('.')];
+                    } else {
+                        pathSegments = header.split('.');
+                    }
+                    const { value: foundValue, actualPath } = caseInsensitiveGet(row, pathSegments);
+                    value = foundValue;
+                    path = actualPath ? [...pathPrefix, rowIndex, ...actualPath] : undefined;
+                } else {
+                    // Row is a primitive, but header is not 'value', so it can't have properties.
+                    value = undefined;
+                    path = undefined;
+                }
+
+                // Fallback for cases like <VOUCHER>123</VOUCHER> where `row` is "123"
+                // and the user selected a column like '#text'. The lookup above would fail.
+                if (value === undefined && (header === '#text') && typeof row !== 'object') {
+                    value = row;
+                    path = [...pathPrefix, rowIndex];
+                }
                 
                 nextWipRows.push({
                     ...wip,
@@ -139,8 +170,81 @@ function flattenRow(row, rowIndex, headers, pathPrefix) {
     return wipRows.map(wip => ({ ...wip.values, __originalIndex: rowIndex }));
 }
 
+function FilterPopover({ headerKey, path, onClose }) {
+    const { setTableFilter, tableFilters } = useStore.getState();
+    const pathKey = JSON.stringify(path);
+    const currentFilter = tableFilters[pathKey]?.[headerKey] || '';
+    const [filterInput, setFilterInput] = useState(currentFilter);
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+
+    const handleApply = () => {
+        setTableFilter(path, headerKey, filterInput);
+        onClose();
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            handleApply();
+        }
+        if (e.key === 'Escape') {
+            onClose();
+        }
+    };
+    
+    const handleClear = () => {
+        setFilterInput('');
+        setTableFilter(path, headerKey, '');
+        onClose();
+    };
+
+    return (
+        <div className="filter-popover" onClick={e => e.stopPropagation()}>
+            <input
+                ref={inputRef}
+                type="text"
+                placeholder='Filter... (e.g. A*B "C D")'
+                value={filterInput}
+                onChange={e => setFilterInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+            />
+            <button onClick={handleApply} title="Apply"><span className="icon">check</span></button>
+            <button onClick={handleClear} title="Clear"><span className="icon">clear</span></button>
+        </div>
+    );
+}
+
+
+function getColumnFilterType(rows, headerKey) {
+    let hasPrimitives = false;
+    let hasObjects = false;
+    // Check a sample of rows for performance
+    for (let i = 0; i < rows.length && i < 50; i++) {
+        const cellValue = rows[i][headerKey]?.value;
+        if (typeof cellValue === 'object' && cellValue !== null) {
+            hasObjects = true;
+        } else if (cellValue !== undefined && cellValue !== null) {
+            hasPrimitives = true;
+        }
+    }
+    // If a column exclusively contains objects, it's suitable for advanced filtering.
+    if (hasObjects && !hasPrimitives) return 'advanced';
+    // If it exclusively contains primitives, it gets a simple filter.
+    if (hasPrimitives && !hasObjects) return 'simple';
+    // Mixed or empty columns are not filterable for now.
+    return 'none';
+}
+
 
 function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
+    const [activeFilter, setActiveFilter] = useState(null);
+    const tableFilters = useStore.use.tableFilters();
+    const pathKey = JSON.stringify(pathPrefix);
+    const filtersForTable = tableFilters[pathKey];
+
     if (!Array.isArray(data) || data.length === 0) {
         return <div className="placeholder"><p>This node contains no data to display in a table.</p></div>;
     }
@@ -153,6 +257,68 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
 
     const allFlatRows = data.flatMap((row, rowIndex) => flattenRow(row, rowIndex, headers, pathPrefix));
 
+    const parsedFilters = useMemo(() => {
+        if (!filtersForTable) return null;
+        const parsed = {};
+        for (const headerKey in filtersForTable) {
+            const filterConfig = filtersForTable[headerKey];
+            if (typeof filterConfig === 'object' && filterConfig.type === 'advanced') {
+                parsed[headerKey] = {
+                    type: 'advanced',
+                    key: filterConfig.key,
+                    conditions: parseFilterQuery(filterConfig.query || ''),
+                };
+            } else {
+                // Simple filter (string)
+                parsed[headerKey] = {
+                    type: 'simple',
+                    conditions: parseFilterQuery(String(filterConfig || '')),
+                };
+            }
+        }
+        return parsed;
+    }, [filtersForTable]);
+
+    const filteredRows = useMemo(() => {
+        if (!parsedFilters || Object.keys(parsedFilters).length === 0) {
+            return allFlatRows;
+        }
+    
+        const activeFilterKeys = Object.keys(parsedFilters).filter(key => parsedFilters[key].conditions.length > 0);
+        if (activeFilterKeys.length === 0) {
+            return allFlatRows;
+        }
+    
+        return allFlatRows.filter(flatRow => {
+            return activeFilterKeys.every(headerKey => {
+                const filter = parsedFilters[headerKey];
+                
+                if (filter.type === 'advanced') {
+                    // For advanced filters, we check the original data item for this row.
+                    const originalRow = data[flatRow.__originalIndex];
+                    if (!originalRow) return false;
+    
+                    // Find the nested data within the original row that this column points to.
+                    const { value: columnData } = caseInsensitiveGet(originalRow, headerKey.split('.'));
+                    const itemsToTest = Array.isArray(columnData) ? columnData : [columnData].filter(Boolean);
+    
+                    if (itemsToTest.length === 0) return false;
+    
+                    // The row passes if AT LEAST ONE of the nested items matches the sub-filter.
+                    return itemsToTest.some(item => {
+                        if (typeof item !== 'object' || item === null) return false;
+                        const { value: nestedValue } = caseInsensitiveGet(item, filter.key.split('.'));
+                        return testValue(nestedValue, filter.conditions);
+                    });
+                } else { // 'simple'
+                    // For simple filters, we check the value in the flattened row.
+                    const cellValue = flatRow[headerKey]?.value;
+                    return testValue(cellValue, filter.conditions);
+                }
+            });
+        });
+    }, [allFlatRows, parsedFilters, data]);
+
     return (
         <table className="data-table">
             <thead>
@@ -161,25 +327,61 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                         const isComplex = typeof header === 'object';
                         const key = getHeaderKey(header);
                         const name = isComplex ? key : (header.startsWith('@') ? header.substring(1) : header);
-                        return <th key={key}>{name}</th>
+                        const filterType = getColumnFilterType(allFlatRows, key);
+                        const currentFilter = filtersForTable?.[key];
+                        const isActive = typeof currentFilter === 'string' ? !!currentFilter : !!currentFilter?.query;
+
+                        return (
+                            <th key={key}>
+                                <div className="th-content">
+                                    <span>{name}</span>
+                                    {filterType !== 'none' && (
+                                        <>
+                                            <button
+                                                className={clsx("filter-btn", { active: isActive })}
+                                                onClick={(e) => { e.stopPropagation(); setActiveFilter(activeFilter === key ? null : key) }}
+                                                title="Filter column"
+                                            >
+                                                <span className="icon">filter_list</span>
+                                            </button>
+                                            {activeFilter === key && filterType === 'simple' && (
+                                                <FilterPopover
+                                                    headerKey={key}
+                                                    path={pathPrefix}
+                                                    onClose={() => setActiveFilter(null)}
+                                                />
+                                            )}
+                                            {activeFilter === key && filterType === 'advanced' && (
+                                                <AdvancedFilterPopover
+                                                    headerKey={key}
+                                                    path={pathPrefix}
+                                                    onClose={() => setActiveFilter(null)}
+                                                    rows={allFlatRows}
+                                                />
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            </th>
+                        )
                     })}
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
-                {allFlatRows.map((flatRow, flatRowIndex) => {
+                {filteredRows.map((row, index) => {
                     // Determine if this is the first sub-row for a given original data row.
                     // This is used to render the delete button only once with a correct rowspan.
-                    const isFirstInGroup = flatRowIndex === 0 || allFlatRows[flatRowIndex - 1].__originalIndex !== flatRow.__originalIndex;
+                    const isFirstInGroup = index === 0 || filteredRows[index - 1].__originalIndex !== row.__originalIndex;
                     const rowSpan = isFirstInGroup
-                        ? allFlatRows.filter(r => r.__originalIndex === flatRow.__originalIndex).length
+                        ? filteredRows.filter(r => r.__originalIndex === row.__originalIndex).length
                         : 1;
 
                     return (
-                        <tr key={flatRowIndex}>
+                        <tr key={index}>
                             {headers.map((header) => {
                                 const headerKey = getHeaderKey(header);
-                                const cell = flatRow[headerKey] || { value: undefined, path: undefined };
+                                const cell = row[headerKey] || { value: undefined, path: undefined };
                                 return (
                                     <td key={headerKey}>
                                         <ValueRenderer value={cell.value} path={cell.path} />
@@ -192,7 +394,7 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                                     <button
                                         className="delete-action-btn"
                                         title="Delete row"
-                                        onClick={() => handleDelete(flatRow.__originalIndex)}
+                                        onClick={() => handleDelete(row.__originalIndex)}
                                     >
                                         <span className="icon">delete</span>
                                     </button>
