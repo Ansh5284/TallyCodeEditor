@@ -1,62 +1,87 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import useStore from '../lib/store';
 import { getHeadersFromAllItems } from './ColumnSelectorModal';
-import get from 'lodash.get';
+
+/**
+ * Case-insensitive version of lodash.get, required because data keys from XML are
+ * often uppercase, but we want our logic to be flexible.
+ * @param {object} obj - The object to search within.
+ * @param {Array<string>} pathSegments - The path to the desired property.
+ * @returns {{value: any}} The found value.
+ */
+function caseInsensitiveGet(obj, pathSegments) {
+    let current = obj;
+    if (!pathSegments || !Array.isArray(pathSegments)) return { value: undefined };
+    for (const segment of pathSegments) {
+        if (typeof current !== 'object' || current === null) return { value: undefined };
+        
+        const key = Object.keys(current).find(k => String(k).toLowerCase() === String(segment).toLowerCase());
+        
+        if (key === undefined) return { value: undefined };
+        
+        current = current[key];
+    }
+    return { value: current };
+}
 
 export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }) {
     const { setTableFilter, tableFilters } = useStore.getState();
     const pathKey = JSON.stringify(path);
     const currentFilter = tableFilters[pathKey]?.[headerKey] || {};
 
+    // drilldownPath is an array of keys representing the path into the nested object
     const [drilldownPath, setDrilldownPath] = useState([]);
+    // selectedKey is the final leaf-node key the user wants to filter by
     const [selectedKey, setSelectedKey] = useState(null);
     const [filterInput, setFilterInput] = useState(currentFilter.query || '');
     const inputRef = useRef(null);
     
     // On mount, check for an existing filter and set the initial state
     useEffect(() => {
-        if (currentFilter.key && typeof currentFilter.key === 'string') {
-            const parts = currentFilter.key.split('.');
-            if (parts.length > 1) {
-                setDrilldownPath(parts.slice(0, -1));
-                setSelectedKey(parts.slice(-1)[0]);
-            } else {
-                setSelectedKey(currentFilter.key);
+        if (currentFilter.key && Array.isArray(currentFilter.key)) {
+            const keyPath = currentFilter.key;
+            if (keyPath.length > 1) {
+                setDrilldownPath(keyPath.slice(0, -1));
+                setSelectedKey(keyPath.slice(-1)[0]);
+            } else if (keyPath.length === 1) {
+                setSelectedKey(keyPath[0]);
             }
         }
-    }, []); // Note: Empty dependency array ensures this runs only once on mount
+    }, []); // Runs only on mount
 
     // Analyzes and returns the available keys at the current drilldown level
     const displayedKeys = useMemo(() => {
-        // 1. Get the initial set of objects for the column, flattening arrays
+        // 1. Get the initial set of objects for the column from all flattened rows.
         let currentLevelObjects = rows
             .map(row => row[headerKey]?.value)
-            .filter(v => typeof v === 'object' && v !== null)
-            .flat();
+            .filter(v => v !== null && v !== undefined)
+            .flat(); // Flatten in case a cell contains an array of objects
 
-        // 2. Drill down to the current path
+        // 2. Drill down to the current path using the case-insensitive helper
         if (drilldownPath.length > 0) {
             currentLevelObjects = currentLevelObjects
-                .map(obj => get(obj, drilldownPath))
-                .filter(v => typeof v === 'object' && v !== null)
+                .map(obj => caseInsensitiveGet(obj, drilldownPath).value)
+                .filter(v => v !== null && v !== undefined)
                 .flat();
         }
         
-        // 3. Get all unique headers from this level
+        // 3. Get all unique headers from all objects at this level
         const allHeaders = getHeadersFromAllItems(currentLevelObjects);
 
         // 4. Analyze each header to see if it points to another nested object/array
         return allHeaders.map(headerName => {
             let isNested = false;
-            for (const item of currentLevelObjects) {
+            // Check a sample of items for performance
+            for (let i = 0; i < currentLevelObjects.length && i < 20; i++) {
+                const item = currentLevelObjects[i];
                 if(typeof item !== 'object' || item === null) continue;
 
                 const pathSegments = headerName.startsWith('@') ? ['@attributes', headerName.substring(1)] : [headerName];
-                const value = get(item, pathSegments);
+                const { value } = caseInsensitiveGet(item, pathSegments);
 
                 if (typeof value === 'object' && value !== null) {
                     isNested = true;
-                    break; // Found one nested value, so this key is considered expandable
+                    break; // Found one nested value, so this key is expandable
                 }
             }
             return { name: headerName, isNested };
@@ -87,7 +112,7 @@ export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }
 
     const handleApply = () => {
         if (!selectedKey) return;
-        const fullKeyPath = [...drilldownPath, selectedKey].join('.');
+        const fullKeyPath = [...drilldownPath, selectedKey];
         setTableFilter(path, headerKey, {
             type: 'advanced',
             key: fullKeyPath,
@@ -107,12 +132,16 @@ export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }
     };
     
     const getHeaderDisplayName = (header) => {
+        if (header === null || header === undefined) return '';
         if (header.startsWith('@')) return header.substring(1);
         if (header === '#text') return 'Text Content';
+        if (header === 'value') return 'Value';
         return header;
     };
     
-    const currentPathForDisplay = [headerKey, ...drilldownPath].join('.');
+    // Construct a readable path for the popover header
+    const pathForDisplay = [headerKey, ...drilldownPath].map(getHeaderDisplayName).join(' > ');
+    const fullPathForDisplay = selectedKey ? `${pathForDisplay} > ${getHeaderDisplayName(selectedKey)}` : `Filter within: ${pathForDisplay}`;
 
     return (
         <div className="advanced-filter-popover" onClick={e => e.stopPropagation()}>
@@ -122,30 +151,38 @@ export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }
                         <span className="icon">arrow_back</span>
                     </button>
                  )}
-                 <p title={selectedKey ? `${currentPathForDisplay}.${selectedKey}` : `Filter within ${currentPathForDisplay}`}>
-                    {selectedKey ? `${currentPathForDisplay}.${selectedKey}` : `Filter within ${currentPathForDisplay}`}
+                 <p title={fullPathForDisplay}>
+                    {fullPathForDisplay}
                  </p>
             </div>
             <div className="advanced-filter-body">
                 {!selectedKey ? (
-                    <ul className="key-list">
-                        {displayedKeys.map(key => (
-                            <li key={key.name} className="key-list-item">
-                                <button onClick={() => handleKeyClick(key)}>
-                                    <span>{getHeaderDisplayName(key.name)}</span>
-                                    {key.isNested && <span className="icon">chevron_right</span>}
-                                </button>
-                            </li>
-                        ))}
-                         {displayedKeys.length === 0 && <p style={{color: 'var(--fg-muted)', fontStyle: 'italic', padding: '8px'}}>No filterable fields found.</p>}
-                    </ul>
+                    displayedKeys.length > 0 ? (
+                        <ul className="key-list">
+                            {displayedKeys.map(key => (
+                                <li key={key.name} className="key-list-item">
+                                    <button onClick={() => handleKeyClick(key)}>
+                                        <span>{getHeaderDisplayName(key.name)}</span>
+                                        {key.isNested && <span className="icon">chevron_right</span>}
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div style={{color: 'var(--fg-muted)', padding: '8px', fontSize: '0.9em'}}>
+                            <p>No filterable fields found.</p>
+                            <p style={{marginTop: '8px', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', color: 'var(--fg-secondary)'}}>
+                                Path: {pathForDisplay}
+                            </p>
+                        </div>
+                    )
                 ) : (
                     <div className="filter-input-section">
                         <div className="filter-popover">
                             <input
                                 ref={inputRef}
                                 type="text"
-                                placeholder={`Filter by ${selectedKey}...`}
+                                placeholder={`Filter by ${getHeaderDisplayName(selectedKey)}...`}
                                 value={filterInput}
                                 onChange={e => setFilterInput(e.target.value)}
                                 onKeyDown={handleKeyDown}

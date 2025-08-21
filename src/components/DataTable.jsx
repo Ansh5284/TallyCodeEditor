@@ -25,11 +25,12 @@ function getHeaderKey(header) {
 function caseInsensitiveGet(obj, pathSegments) {
     let current = obj;
     const actualPath = [];
+    if (!pathSegments) return { value: undefined, actualPath: null };
     for (const segment of pathSegments) {
         if (typeof current !== 'object' || current === null) return { value: undefined, actualPath: null };
         
         // Find the key in the current object that matches the segment case-insensitively.
-        const key = Object.keys(current).find(k => k.toLowerCase() === segment.toLowerCase());
+        const key = Object.keys(current).find(k => k.toLowerCase() === String(segment).toLowerCase());
         
         if (key === undefined) return { value: undefined, actualPath: null };
         
@@ -78,7 +79,8 @@ function flattenRow(row, rowIndex, headers, pathPrefix) {
                         // Support dot notation within attributes if ever needed, e.g., @ATTR.NESTED
                         pathSegments = ['@attributes', ...header.substring(1).split('.')];
                     } else {
-                        pathSegments = header.split('.');
+                        // A simple header string is treated as a single key, not a path.
+                        pathSegments = [header];
                     }
                     const { value: foundValue, actualPath } = caseInsensitiveGet(row, pathSegments);
                     value = foundValue;
@@ -238,6 +240,45 @@ function getColumnFilterType(rows, headerKey) {
     return 'none';
 }
 
+/**
+ * Recursively checks if a nested path in an object matches filter conditions.
+ * Handles arrays at any level of the path by checking if "some" element matches.
+ * @param {object|Array} target - The object or array to search within.
+ * @param {Array<string>} pathSegments - The path to follow (e.g., ['LEDGERENTRIES.LIST', 'LEDGERNAME']).
+ * @param {Array<object>} conditions - The parsed filter conditions from parseFilterQuery.
+ * @returns {boolean} - True if a match is found.
+ */
+const checkPathInObject = (target, pathSegments, conditions) => {
+    // If target is an array, check if any element in it matches the full path.
+    if (Array.isArray(target)) {
+        return target.some(item => checkPathInObject(item, pathSegments, conditions));
+    }
+    
+    // If target is not an object or path is empty, we can't go deeper.
+    if (typeof target !== 'object' || target === null || pathSegments.length === 0) {
+        return false;
+    }
+
+    const [currentSegment, ...remainingSegments] = pathSegments;
+
+    // Find the key in the current object that matches the segment case-insensitively.
+    const key = Object.keys(target).find(k => k.toLowerCase() === String(currentSegment).toLowerCase());
+    if (key === undefined) return false;
+    
+    const value = target[key];
+
+    // If we are at the last segment of the path, test the value.
+    if (remainingSegments.length === 0) {
+        // If the final value is an array, test each element against the conditions.
+        if (Array.isArray(value)) {
+            return value.some(item => testValue(item, conditions));
+        }
+        return testValue(value, conditions);
+    }
+    
+    // If not at the end, recurse deeper. The 'value' becomes the new 'target'.
+    return checkPathInObject(value, remainingSegments, conditions);
+};
 
 function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
     const [activeFilter, setActiveFilter] = useState(null);
@@ -265,14 +306,14 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
             if (typeof filterConfig === 'object' && filterConfig.type === 'advanced') {
                 parsed[headerKey] = {
                     type: 'advanced',
-                    key: filterConfig.key,
+                    key: filterConfig.key, // Expects an array of path segments
                     conditions: parseFilterQuery(filterConfig.query || ''),
                 };
-            } else {
+            } else if (filterConfig) {
                 // Simple filter (string)
                 parsed[headerKey] = {
                     type: 'simple',
-                    conditions: parseFilterQuery(String(filterConfig || '')),
+                    conditions: parseFilterQuery(String(filterConfig)),
                 };
             }
         }
@@ -284,40 +325,51 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
             return allFlatRows;
         }
     
-        const activeFilterKeys = Object.keys(parsedFilters).filter(key => parsedFilters[key].conditions.length > 0);
+        const activeFilterKeys = Object.keys(parsedFilters).filter(key => {
+            const p = parsedFilters[key];
+            return p.conditions && p.conditions.length > 0;
+        });
+    
         if (activeFilterKeys.length === 0) {
             return allFlatRows;
         }
     
+        const rowMatchesAdvancedFilter = (originalRow, headerKey, filter) => {
+            const headerDefinition = headers.find(h => getHeaderKey(h) === headerKey);
+            // Advanced filters only work on simple columns (string header) that contain objects.
+            if (!headerDefinition || typeof headerDefinition !== 'string') return true;
+
+            const { value: columnData } = caseInsensitiveGet(originalRow, [headerDefinition]);
+
+            if (columnData === undefined || columnData === null) {
+                return false;
+            }
+            
+            return checkPathInObject(columnData, filter.key, filter.conditions);
+        };
+        
+        // Helper to apply a simple filter to a single flattened row cell
+        const cellMatchesSimpleFilter = (flatRow, headerKey, filter) => {
+            const cellValue = flatRow[headerKey]?.value;
+            return testValue(cellValue, filter.conditions);
+        };
+    
         return allFlatRows.filter(flatRow => {
+            // A row must match EVERY active filter
             return activeFilterKeys.every(headerKey => {
                 const filter = parsedFilters[headerKey];
                 
                 if (filter.type === 'advanced') {
-                    // For advanced filters, we check the original data item for this row.
                     const originalRow = data[flatRow.__originalIndex];
                     if (!originalRow) return false;
-    
-                    // Find the nested data within the original row that this column points to.
-                    const { value: columnData } = caseInsensitiveGet(originalRow, headerKey.split('.'));
-                    const itemsToTest = Array.isArray(columnData) ? columnData : [columnData].filter(Boolean);
-    
-                    if (itemsToTest.length === 0) return false;
-    
-                    // The row passes if AT LEAST ONE of the nested items matches the sub-filter.
-                    return itemsToTest.some(item => {
-                        if (typeof item !== 'object' || item === null) return false;
-                        const { value: nestedValue } = caseInsensitiveGet(item, filter.key.split('.'));
-                        return testValue(nestedValue, filter.conditions);
-                    });
-                } else { // 'simple'
-                    // For simple filters, we check the value in the flattened row.
-                    const cellValue = flatRow[headerKey]?.value;
-                    return testValue(cellValue, filter.conditions);
+                    return rowMatchesAdvancedFilter(originalRow, headerKey, filter);
                 }
+                
+                // 'simple' filter
+                return cellMatchesSimpleFilter(flatRow, headerKey, filter);
             });
         });
-    }, [allFlatRows, parsedFilters, data]);
+    }, [allFlatRows, parsedFilters, data, headers]);
 
     return (
         <table className="data-table">
@@ -369,40 +421,89 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                 </tr>
             </thead>
             <tbody>
-                {filteredRows.map((row, index) => {
-                    // Determine if this is the first sub-row for a given original data row.
-                    // This is used to render the delete button only once with a correct rowspan.
-                    const isFirstInGroup = index === 0 || filteredRows[index - 1].__originalIndex !== row.__originalIndex;
-                    const rowSpan = isFirstInGroup
-                        ? filteredRows.filter(r => r.__originalIndex === row.__originalIndex).length
-                        : 1;
+                {filteredRows.length > 0 ? (
+                    filteredRows.map((row, index) => {
+                        const isFirstInGroup = index === 0 || filteredRows[index - 1].__originalIndex !== row.__originalIndex;
+                        const rowSpan = isFirstInGroup
+                            ? filteredRows.filter(r => r.__originalIndex === row.__originalIndex).length
+                            : 1;
 
-                    return (
-                        <tr key={index}>
-                            {headers.map((header) => {
-                                const headerKey = getHeaderKey(header);
-                                const cell = row[headerKey] || { value: undefined, path: undefined };
-                                return (
-                                    <td key={headerKey}>
-                                        <ValueRenderer value={cell.value} path={cell.path} />
+                        return (
+                            <tr key={index}>
+                                {headers.map((header) => {
+                                    const headerKey = getHeaderKey(header);
+                                    const cell = row[headerKey] || { value: undefined, path: undefined };
+                                    return (
+                                        <td key={headerKey}>
+                                            <ValueRenderer value={cell.value} path={cell.path} />
+                                        </td>
+                                    );
+                                })}
+                                
+                                {isFirstInGroup && (
+                                    <td rowSpan={rowSpan} style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                                        <button
+                                            className="delete-action-btn"
+                                            title="Delete row"
+                                            onClick={() => handleDelete(row.__originalIndex)}
+                                        >
+                                            <span className="icon">delete</span>
+                                        </button>
                                     </td>
-                                );
-                            })}
-                            
-                            {isFirstInGroup && (
-                                <td rowSpan={rowSpan} style={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                                    <button
-                                        className="delete-action-btn"
-                                        title="Delete row"
-                                        onClick={() => handleDelete(row.__originalIndex)}
-                                    >
-                                        <span className="icon">delete</span>
-                                    </button>
-                                </td>
-                            )}
-                        </tr>
-                    )
-                })}
+                                )}
+                            </tr>
+                        )
+                    })
+                ) : (
+                    <tr>
+                        <td colSpan={headers.length + 1}>
+                             <div className="placeholder" style={{ padding: '32px' }}>
+                                <span className="icon">search_off</span>
+                                <p style={{ fontWeight: 500, color: 'var(--fg-primary)', fontSize: '1.1em', marginTop: '0.5rem' }}>No results match your filter criteria.</p>
+                                
+                                {filtersForTable && Object.keys(filtersForTable).length > 0 && (
+                                    <div style={{ 
+                                        textAlign: 'left', 
+                                        fontFamily: 'var(--font-mono)', 
+                                        fontSize: '0.9em', 
+                                        marginTop: '24px', 
+                                        padding: '16px',
+                                        backgroundColor: 'var(--bg-dark-contrast)',
+                                        borderRadius: '6px',
+                                        border: '1px solid var(--border-color)',
+                                        maxWidth: '600px',
+                                        wordBreak: 'break-all'
+                                    }}>
+                                        <p style={{ fontWeight: 'bold', color: 'var(--fg-secondary)', marginBottom: '12px' }}>Active Filters:</p>
+                                        <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {Object.entries(filtersForTable).map(([headerKey, filter]) => {
+                                                const hasQuery = (typeof filter === 'string' && filter) || (typeof filter === 'object' && filter?.query);
+                                                if (!hasQuery) return null;
+
+                                                if (typeof filter === 'object' && filter.type === 'advanced') {
+                                                    const fullPath = [headerKey, ...(filter.key || [])].join(' > ');
+                                                    return (
+                                                        <li key={headerKey}>
+                                                            <span style={{ color: 'var(--accent-cyan)' }}>{fullPath}:</span>
+                                                            <span style={{ color: 'var(--fg-primary)' }}> "{filter.query}"</span>
+                                                        </li>
+                                                    );
+                                                }
+                                                
+                                                return (
+                                                    <li key={headerKey}>
+                                                        <span style={{ color: 'var(--accent-cyan)' }}>{headerKey}:</span>
+                                                        <span style={{ color: 'var(--fg-primary)' }}> "{String(filter)}"</span>
+                                                    </li>
+                                                );
+                                            }).filter(Boolean)}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        </td>
+                    </tr>
+                )}
             </tbody>
         </table>
     );
