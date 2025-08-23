@@ -5,6 +5,7 @@
   "main": "electron.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "web": "vite",
     "build": "vite build",
     "start": "npm run build && electron .",
     "test": "echo \"Error: no test specified\" && exit 1"

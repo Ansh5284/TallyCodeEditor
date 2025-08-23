@@ -59,15 +59,18 @@ export default function ColumnSelectorModal() {
   
   const path = nodeForColumnSelection?.path;
   const parentPath = nodeForColumnSelection?.parentPath;
+  const directData = nodeForColumnSelection?.data; // Data passed directly from a filtered view
   const pathKey = path ? JSON.stringify(path) : null;
   const parentPathKey = parentPath ? JSON.stringify(parentPath) : null;
 
   const [filter, setFilter] = useState('');
 
   const data = useMemo(() => {
+    // Prioritize directly passed data from a filtered view
+    if (directData) return directData;
     if (!path || !xmlDoc) return null;
     return get(xmlDoc.doc, path);
-  }, [path, xmlDoc]);
+  }, [path, xmlDoc, directData]);
   
   // This logic finds the data we want to get columns from.
   // It drills down into wrapper objects if needed, but only when viewing from the tree.
@@ -75,8 +78,9 @@ export default function ColumnSelectorModal() {
     if (!data) return { sourceArray: [], arrayPath: [] };
 
     // If we are expanding from within a table (parentPath exists), 
-    // do not drill down. The user wants to see the columns of the object they clicked on.
-    if (parentPath) {
+    // or if data was passed directly (implying a filtered context),
+    // do not drill down. The user wants to see columns of the specific data provided.
+    if (parentPath || directData) {
       return { sourceArray: data, arrayPath: [] };
     }
 
@@ -109,7 +113,7 @@ export default function ColumnSelectorModal() {
       }
     }
     return { sourceArray: currentData, arrayPath: pathSegments };
-  }, [data, parentPath]);
+  }, [data, parentPath, directData]);
 
 
   const allHeaders = useMemo(() => getHeadersFromAllItems(sourceArray), [sourceArray]);

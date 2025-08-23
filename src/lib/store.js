@@ -11,7 +11,7 @@ const useStoreBase = create(
     xmlDoc: null, // Will be { doc, rootName, originalXml }
     viewingNodePath: null, // Will be an array of path segments, e.g., ['ENVELOPE', 'BODY', 0, 'DATA']
     viewingHistory: [],
-    nodeForColumnSelection: null, // Will be { path, parentPath }
+    nodeForColumnSelection: null, // Will be { path, parentPath, data }
     tableColumns: {}, // { [pathKey]: ['col1', { parent: 'nested', child: 'col2' }] }
     tableFilters: {}, // { [pathKey]: { [headerKey]: 'filter string' } }
     invalidCharsRemoved: 0,
@@ -55,9 +55,9 @@ const useStoreBase = create(
         }
       }),
     
-    setNodeForColumnSelection: (path, parentPath = null) => 
+    setNodeForColumnSelection: (path, parentPath = null, data = null) => 
       set((state) => {
-        state.nodeForColumnSelection = path ? { path, parentPath } : null;
+        state.nodeForColumnSelection = path ? { path, parentPath, data } : null;
       }),
       
     setTableColumns: (path, columns) =>

@@ -368,33 +368,54 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
         for (const [headerKey, filter] of tableTypeFilters) {
             if (!filter.key) continue;
 
+            const headerDefinition = headers.find(h => getHeaderKey(h) === headerKey);
+            if (!headerDefinition) continue;
+
+            // This path is relative to each row in `currentData`
+            const pathSegments = typeof headerDefinition === 'object' && headerDefinition.parent
+                ? [...headerDefinition.parent, headerDefinition.child]
+                : [headerDefinition];
+
             currentData = currentData.map(parentRow => {
-                const { value: nestedArray, actualPath } = caseInsensitiveGet(parentRow, [headerKey]);
+                const { value: nestedData, actualPath } = caseInsensitiveGet(parentRow, pathSegments);
                 
-                if (!Array.isArray(nestedArray)) {
-                    return parentRow; // This row doesn't have the table data.
+                // Treat single objects as an array of one for consistent filtering.
+                const nestedArray = Array.isArray(nestedData)
+                    ? nestedData
+                    : (nestedData !== undefined && nestedData !== null ? [nestedData] : []);
+
+                if (nestedArray.length === 0 || !actualPath) {
+                    return parentRow; // No filterable data at this path.
                 }
 
-                // Filter the nested array based on the criteria.
                 const filteredNestedArray = nestedArray.filter(nestedItem => 
                     checkPathInObject(nestedItem, filter.key, filter.conditions)
                 );
 
-                // If all nested rows are removed, remove the parent row by returning null.
                 if (filteredNestedArray.length === 0) {
-                    return null;
+                    return null; // This parent row will be removed.
                 }
 
-                // Get the actual case-sensitive key to update in the parent row object.
+                // Restore original data structure: if original was not an array, and result is 1, keep it as an object.
+                const finalNestedValue = !Array.isArray(nestedData) && filteredNestedArray.length === 1
+                    ? filteredNestedArray[0]
+                    : filteredNestedArray;
+                
+                // Update the cloned parent row with the filtered nested data.
+                let objectToModify = parentRow;
+                for (let i = 0; i < actualPath.length - 1; i++) {
+                    objectToModify = objectToModify[actualPath[i]];
+                }
                 const keyToUpdate = actualPath[actualPath.length - 1];
-                parentRow[keyToUpdate] = filteredNestedArray;
+                objectToModify[keyToUpdate] = finalNestedValue;
+                
                 return parentRow;
 
             }).filter(Boolean); // Filter out the nulls (rows to be removed).
         }
 
         return currentData;
-    }, [data, parsedFilters]);
+    }, [data, parsedFilters, headers]);
 
     // Recalculate flat rows based on the transformed data.
     const transformedFlatRows = useMemo(() => 

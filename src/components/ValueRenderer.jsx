@@ -15,8 +15,9 @@ export default function ValueRenderer({ value, path }) {
   const handleExpand = (e) => {
     e.stopPropagation();
     const isInsideTable = !!viewingNodePath && Array.isArray(get(useStore.getState().xmlDoc.doc, viewingNodePath));
-    // Pass the current table's path as the parent path for both arrays and objects
-    setNodeForColumnSelection(path, isInsideTable ? viewingNodePath : null);
+    // Pass the current table's path as the parent and the cell's value as the data.
+    // This ensures the modal operates on the filtered data if applicable.
+    setNodeForColumnSelection(path, isInsideTable ? viewingNodePath : null, value);
   };
 
   if (value === undefined || value === null) {
