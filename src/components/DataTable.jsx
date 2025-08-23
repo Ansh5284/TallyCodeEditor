@@ -219,24 +219,33 @@ function FilterPopover({ headerKey, path, onClose }) {
     );
 }
 
-
+/**
+ * Determines the type of filter applicable to a column ('simple', 'advanced', 'table', or 'none').
+ */
 function getColumnFilterType(rows, headerKey) {
     let hasPrimitives = false;
     let hasObjects = false;
+    let hasArrays = false;
+
     // Check a sample of rows for performance
     for (let i = 0; i < rows.length && i < 50; i++) {
         const cellValue = rows[i][headerKey]?.value;
-        if (typeof cellValue === 'object' && cellValue !== null) {
+        if (cellValue === undefined || cellValue === null) continue;
+
+        if (Array.isArray(cellValue)) {
+            hasArrays = true;
+            break; // An array is definitive, we can stop checking.
+        } else if (typeof cellValue === 'object') {
             hasObjects = true;
-        } else if (cellValue !== undefined && cellValue !== null) {
+        } else {
             hasPrimitives = true;
         }
     }
-    // If a column exclusively contains objects, it's suitable for advanced filtering.
+    
+    if (hasArrays) return 'table';
     if (hasObjects && !hasPrimitives) return 'advanced';
-    // If it exclusively contains primitives, it gets a simple filter.
     if (hasPrimitives && !hasObjects) return 'simple';
-    // Mixed or empty columns are not filterable for now.
+
     return 'none';
 }
 
@@ -253,6 +262,12 @@ const checkPathInObject = (target, pathSegments, conditions) => {
     if (Array.isArray(target)) {
         return target.some(item => checkPathInObject(item, pathSegments, conditions));
     }
+
+    // If we are looking for the 'value' of a primitive and are at the end of the path, test it.
+    // This handles filtering within arrays of strings/numbers.
+    if (pathSegments.length === 1 && pathSegments[0] === 'value' && typeof target !== 'object') {
+        return testValue(target, conditions);
+    }
     
     // If target is not an object or path is empty, we can't go deeper.
     if (typeof target !== 'object' || target === null || pathSegments.length === 0) {
@@ -261,11 +276,23 @@ const checkPathInObject = (target, pathSegments, conditions) => {
 
     const [currentSegment, ...remainingSegments] = pathSegments;
 
-    // Find the key in the current object that matches the segment case-insensitively.
-    const key = Object.keys(target).find(k => k.toLowerCase() === String(currentSegment).toLowerCase());
-    if (key === undefined) return false;
-    
-    const value = target[key];
+    let value;
+    if (String(currentSegment).startsWith('@')) {
+        const attributeName = String(currentSegment).substring(1);
+        const attributes = target['@attributes'];
+        if (typeof attributes !== 'object' || attributes === null) return false;
+        
+        // Find the attribute key case-insensitively
+        const attrKey = Object.keys(attributes).find(k => k.toLowerCase() === attributeName.toLowerCase());
+        if (attrKey === undefined) return false;
+        value = attributes[attrKey];
+
+    } else {
+        // Find the key in the current object that matches the segment case-insensitively.
+        const key = Object.keys(target).find(k => k.toLowerCase() === String(currentSegment).toLowerCase());
+        if (key === undefined) return false;
+        value = target[key];
+    }
 
     // If we are at the last segment of the path, test the value.
     if (remainingSegments.length === 0) {
@@ -283,8 +310,6 @@ const checkPathInObject = (target, pathSegments, conditions) => {
 function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
     const [activeFilter, setActiveFilter] = useState(null);
     const tableFilters = useStore.use.tableFilters();
-    const pathKey = JSON.stringify(pathPrefix);
-    const filtersForTable = tableFilters[pathKey];
 
     if (!Array.isArray(data) || data.length === 0) {
         return <div className="placeholder"><p>This node contains no data to display in a table.</p></div>;
@@ -295,22 +320,27 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
             onDeleteRow(originalIndex);
         }
     };
-
-    const allFlatRows = data.flatMap((row, rowIndex) => flattenRow(row, rowIndex, headers, pathPrefix));
+    
+    // Memoize the flat rows before filtering, needed for column type detection.
+    const allFlatRows = useMemo(() => 
+        data.flatMap((row, rowIndex) => flattenRow(row, rowIndex, headers, pathPrefix)),
+    [data, headers, pathPrefix]);
 
     const parsedFilters = useMemo(() => {
+        const pathKey = JSON.stringify(pathPrefix);
+        const filtersForTable = tableFilters[pathKey];
         if (!filtersForTable) return null;
+
         const parsed = {};
         for (const headerKey in filtersForTable) {
             const filterConfig = filtersForTable[headerKey];
-            if (typeof filterConfig === 'object' && filterConfig.type === 'advanced') {
+            if (typeof filterConfig === 'object' && filterConfig.type) {
                 parsed[headerKey] = {
-                    type: 'advanced',
-                    key: filterConfig.key, // Expects an array of path segments
+                    type: filterConfig.type,
+                    key: filterConfig.key,
                     conditions: parseFilterQuery(filterConfig.query || ''),
                 };
-            } else if (filterConfig) {
-                // Simple filter (string)
+            } else if (filterConfig && typeof filterConfig !== 'object') {
                 parsed[headerKey] = {
                     type: 'simple',
                     conditions: parseFilterQuery(String(filterConfig)),
@@ -318,58 +348,94 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
             }
         }
         return parsed;
-    }, [filtersForTable]);
+    }, [tableFilters, pathPrefix]);
 
-    const filteredRows = useMemo(() => {
-        if (!parsedFilters || Object.keys(parsedFilters).length === 0) {
-            return allFlatRows;
+    // STAGE 1: Apply 'table' filters, which transform the data itself.
+    const transformedData = useMemo(() => {
+        if (!parsedFilters) return data;
+
+        const tableTypeFilters = Object.entries(parsedFilters).filter(
+            ([, filter]) => filter.type === 'table' && filter.conditions.length > 0
+        );
+
+        if (tableTypeFilters.length === 0) {
+            return data;
         }
-    
-        const activeFilterKeys = Object.keys(parsedFilters).filter(key => {
-            const p = parsedFilters[key];
-            return p.conditions && p.conditions.length > 0;
-        });
-    
-        if (activeFilterKeys.length === 0) {
-            return allFlatRows;
-        }
-    
-        const rowMatchesAdvancedFilter = (originalRow, headerKey, filter) => {
-            const headerDefinition = headers.find(h => getHeaderKey(h) === headerKey);
-            // Advanced filters only work on simple columns (string header) that contain objects.
-            if (!headerDefinition || typeof headerDefinition !== 'string') return true;
 
-            const { value: columnData } = caseInsensitiveGet(originalRow, [headerDefinition]);
+        // IMPORTANT: Deep copy to avoid mutating original state.
+        let currentData = JSON.parse(JSON.stringify(data)); 
 
-            if (columnData === undefined || columnData === null) {
-                return false;
-            }
-            
-            return checkPathInObject(columnData, filter.key, filter.conditions);
-        };
-        
-        // Helper to apply a simple filter to a single flattened row cell
-        const cellMatchesSimpleFilter = (flatRow, headerKey, filter) => {
-            const cellValue = flatRow[headerKey]?.value;
-            return testValue(cellValue, filter.conditions);
-        };
-    
-        return allFlatRows.filter(flatRow => {
-            // A row must match EVERY active filter
-            return activeFilterKeys.every(headerKey => {
-                const filter = parsedFilters[headerKey];
+        for (const [headerKey, filter] of tableTypeFilters) {
+            if (!filter.key) continue;
+
+            currentData = currentData.map(parentRow => {
+                const { value: nestedArray, actualPath } = caseInsensitiveGet(parentRow, [headerKey]);
                 
-                if (filter.type === 'advanced') {
-                    const originalRow = data[flatRow.__originalIndex];
-                    if (!originalRow) return false;
-                    return rowMatchesAdvancedFilter(originalRow, headerKey, filter);
+                if (!Array.isArray(nestedArray)) {
+                    return parentRow; // This row doesn't have the table data.
+                }
+
+                // Filter the nested array based on the criteria.
+                const filteredNestedArray = nestedArray.filter(nestedItem => 
+                    checkPathInObject(nestedItem, filter.key, filter.conditions)
+                );
+
+                // If all nested rows are removed, remove the parent row by returning null.
+                if (filteredNestedArray.length === 0) {
+                    return null;
+                }
+
+                // Get the actual case-sensitive key to update in the parent row object.
+                const keyToUpdate = actualPath[actualPath.length - 1];
+                parentRow[keyToUpdate] = filteredNestedArray;
+                return parentRow;
+
+            }).filter(Boolean); // Filter out the nulls (rows to be removed).
+        }
+
+        return currentData;
+    }, [data, parsedFilters]);
+
+    // Recalculate flat rows based on the transformed data.
+    const transformedFlatRows = useMemo(() => 
+        transformedData.flatMap((row, rowIndex) => flattenRow(row, rowIndex, headers, pathPrefix)),
+    [transformedData, headers, pathPrefix]);
+
+    // STAGE 2: Apply 'simple' and 'advanced' filters for row visibility.
+    const finalFilteredRows = useMemo(() => {
+        if (!parsedFilters) return transformedFlatRows;
+
+        const visibilityFilters = Object.entries(parsedFilters).filter(
+            ([, filter]) => (filter.type === 'simple' || filter.type === 'advanced') && filter.conditions.length > 0
+        );
+
+        if (visibilityFilters.length === 0) {
+            return transformedFlatRows;
+        }
+        
+        return transformedFlatRows.filter(flatRow => {
+            // A row must match EVERY active visibility filter.
+            return visibilityFilters.every(([headerKey, filter]) => {
+                if (filter.type === 'simple') {
+                    return testValue(flatRow[headerKey]?.value, filter.conditions);
                 }
                 
-                // 'simple' filter
-                return cellMatchesSimpleFilter(flatRow, headerKey, filter);
+                if (filter.type === 'advanced') {
+                    // For advanced filters, we check the original data structure for context.
+                    const originalRow = data[flatRow.__originalIndex];
+                    if (!originalRow) return false;
+                    const { value: columnData } = caseInsensitiveGet(originalRow, [headerKey]);
+                    if (columnData === undefined || columnData === null) return false;
+                    return checkPathInObject(columnData, filter.key, filter.conditions);
+                }
+                
+                return true; // Should not happen
             });
         });
-    }, [allFlatRows, parsedFilters, data, headers]);
+    }, [transformedFlatRows, parsedFilters, data]);
+
+    const pathKey = JSON.stringify(pathPrefix);
+    const filtersForTable = tableFilters[pathKey];
 
     return (
         <table className="data-table">
@@ -403,12 +469,13 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                                                     onClose={() => setActiveFilter(null)}
                                                 />
                                             )}
-                                            {activeFilter === key && filterType === 'advanced' && (
+                                            {activeFilter === key && (filterType === 'advanced' || filterType === 'table') && (
                                                 <AdvancedFilterPopover
                                                     headerKey={key}
                                                     path={pathPrefix}
                                                     onClose={() => setActiveFilter(null)}
                                                     rows={allFlatRows}
+                                                    filterType={filterType}
                                                 />
                                             )}
                                         </>
@@ -421,11 +488,11 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                 </tr>
             </thead>
             <tbody>
-                {filteredRows.length > 0 ? (
-                    filteredRows.map((row, index) => {
-                        const isFirstInGroup = index === 0 || filteredRows[index - 1].__originalIndex !== row.__originalIndex;
+                {finalFilteredRows.length > 0 ? (
+                    finalFilteredRows.map((row, index) => {
+                        const isFirstInGroup = index === 0 || finalFilteredRows[index - 1].__originalIndex !== row.__originalIndex;
                         const rowSpan = isFirstInGroup
-                            ? filteredRows.filter(r => r.__originalIndex === row.__originalIndex).length
+                            ? finalFilteredRows.filter(r => r.__originalIndex === row.__originalIndex).length
                             : 1;
 
                         return (
@@ -480,7 +547,7 @@ function DataTableContent({ data, headers, pathPrefix, onDeleteRow }) {
                                                 const hasQuery = (typeof filter === 'string' && filter) || (typeof filter === 'object' && filter?.query);
                                                 if (!hasQuery) return null;
 
-                                                if (typeof filter === 'object' && filter.type === 'advanced') {
+                                                if (typeof filter === 'object' && (filter.type === 'advanced' || filter.type === 'table')) {
                                                     const fullPath = [headerKey, ...(filter.key || [])].join(' > ');
                                                     return (
                                                         <li key={headerKey}>

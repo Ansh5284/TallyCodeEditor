@@ -24,7 +24,7 @@ function caseInsensitiveGet(obj, pathSegments) {
     return { value: current };
 }
 
-export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }) {
+export default function AdvancedFilterPopover({ headerKey, path, onClose, rows, filterType = 'advanced' }) {
     const { setTableFilter, tableFilters } = useStore.getState();
     const pathKey = JSON.stringify(path);
     const currentFilter = tableFilters[pathKey]?.[headerKey] || {};
@@ -114,7 +114,7 @@ export default function AdvancedFilterPopover({ headerKey, path, onClose, rows }
         if (!selectedKey) return;
         const fullKeyPath = [...drilldownPath, selectedKey];
         setTableFilter(path, headerKey, {
-            type: 'advanced',
+            type: filterType,
             key: fullKeyPath,
             query: filterInput,
         });
